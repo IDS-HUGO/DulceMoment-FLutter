@@ -12,12 +12,15 @@ class AuthService {
     required String password,
     required String role, // 'customer' | 'store'
   }) async {
-    if (name.trim().isEmpty || email.trim().isEmpty || password.length < 6) {
+    // Sanitización fuerte del correo (quita espacios, saltos de línea y caracteres invisibles)
+    final cleanEmail = email.replaceAll(RegExp(r'\s+'), '').replaceAll(RegExp(r'[\u200B-\u200D\uFEFF]'), '').trim();
+
+    if (name.trim().isEmpty || cleanEmail.isEmpty || password.length < 6) {
       throw ArgumentError('Datos inválidos. Contraseña mínima 6 caracteres.');
     }
 
     final response = await supabase.auth.signUp(
-      email: email.trim(),
+      email: cleanEmail,
       password: password,
       data: {
         'name': name.trim(),
