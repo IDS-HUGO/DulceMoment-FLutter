@@ -1,84 +1,51 @@
 # DulceMoment · Flutter + Supabase
 
-Migración de la app Android nativa (Kotlin/Compose) original a Flutter,
-usando **Supabase** (Auth + Postgres + Realtime) en lugar del backend REST
-propio + Room local.
+Dulce Moment es una aplicación móvil de pastelería (cliente y administrador/tienda) desarrollada en **Flutter**, utilizando **Supabase** (Auth + Postgres + Realtime) como backend y **Cloudinary** para el almacenamiento de imágenes.
 
-## 1. Configurar el proyecto Supabase
+## 1. Características Principales
 
-1. Crea un proyecto en https://supabase.com.
-2. Ve a **SQL Editor** y ejecuta completo el archivo:
-   `lib/supabase/schema.sql`
-   Esto crea las tablas (`profiles`, `products`, `product_options`, `orders`,
-   `order_items`, `tracking_events`, `payments`, `push_alerts`), el trigger
-   que crea el `profile` automáticamente al registrarse, las políticas RLS
-   y activa Realtime en las tablas necesarias.
-3. Ve a **Project Settings > API** y copia `Project URL` y `anon public key`.
-4. Pégalos en `lib/core/supabase_config.dart`:
+*   **Roles Integrados:** Un mismo código maneja tanto la vista del cliente (catálogo, carrito, pago, seguimiento) como la del administrador/tienda (gestión de productos, recepción y avance de pedidos).
+*   **Base de Datos en Tiempo Real:** Todos los pedidos y estados de catálogo se reflejan instantáneamente en los dispositivos conectados gracias a Supabase Realtime.
+*   **Diseño Premium UI/UX:** Interfaz moderna con animaciones fluidas, gradientes dinámicos y navegación responsiva.
 
-```dart
-static const String url = 'https://TU_PROYECTO.supabase.co';
-static const String anonKey = 'TU_ANON_KEY';
-```
+## 2. Aclaraciones Importantes del Proyecto (Manual)
 
-5. (Opcional pero recomendado) En **Authentication > Providers > Email**,
-   desactiva "Confirm email" mientras desarrollas, para poder loguearte
-   inmediatamente después de registrarte.
+### 💳 Pasarela de Pago Simulada
+El sistema de pago incluido en esta aplicación está **SIMULADO** por motivos académicos/demostrativos. 
+*   **¿Qué hace?** Valida localmente que el número de tarjeta ingresado sea un formato matemático válido (utilizando el Algoritmo de Luhn), que la fecha no esté expirada y que el CVC tenga longitud correcta.
+*   **¿Qué NO hace?** No realiza cobros reales a bancos ni contacta a pasarelas como Stripe o PayPal. Al "aprobarse" el pago localmente, simplemente se registra la orden como "pagada" en Supabase.
+*   *Para llevar esto a producción*, se debe integrar un SDK de pagos o una Supabase Edge Function que procese tokens reales de tarjeta.
 
-## 2. Instalar dependencias y correr
+### 🖼️ Subida de Imágenes con Cloudinary
+Para la creación de productos desde la cuenta "Tienda", la aplicación integra el plugin `image_picker`. 
+*   Al seleccionar una foto de la galería o tomarla con la cámara, la imagen se envía directamente a la API REST de **Cloudinary** firmando la petición en el dispositivo con SHA1 para mayor seguridad.
+*   Cloudinary devuelve una URL pública y segura (`secure_url`) que se guarda en la base de datos de Supabase.
+
+## 3. Configuración del Proyecto (Backend)
+
+1.  Crea un proyecto en https://supabase.com.
+2.  Ve a **SQL Editor** y ejecuta completo el archivo: `lib/supabase/schema.sql` (Esto crea tablas, triggers y políticas RLS).
+3.  Ve a **Project Settings > API** y reemplaza los valores de `Project URL` y `anon public key` en `lib/core/supabase_config.dart`.
+4.  En **Authentication > Providers > Email**, *apaga* "Confirm email" para evitar el límite de correos durante tus pruebas.
+
+## 4. Instalación y Ejecución
 
 ```bash
+# Obtener dependencias (incluye supabase, provider, image_picker, http, crypto)
 flutter pub get
-flutter run
+
+# (Opcional) Generar los íconos de la app si cambiaste el logo
+dart run flutter_launcher_icons
+
+# Compilar para Android (APK Release)
+flutter clean
+flutter build apk --release
 ```
 
-## 3. Estructura del lib/
+### Configuración para Release (Android)
+El proyecto ya cuenta con la configuración estricta para compilarse en Release en Android (`flutter build apk --release`):
+*   **Permisos de Internet y Cámara** incluidos en `android/app/src/main/AndroidManifest.xml`.
+*   **Network Security Config** habilitado para permitir conexiones HTTPS hacia `supabase.co`.
+*   **Reglas ProGuard (`proguard-rules.pro`)** activadas para evitar que el compilador R8 elimine las clases necesarias para que Supabase funcione correctamente.
 
-```
-lib/
-├── core/
-│   └── supabase_config.dart        # URL + anonKey + init de Supabase
-├── models/                         # Entidades: AppUser, Product, CakeOrder...
-├── services/
-│   ├── auth_service.dart           # signUp / signIn / profiles
-│   ├── product_service.dart        # catálogo, opciones, stock
-│   ├── order_service.dart          # pedidos, tracking, resumen de ventas
-│   ├── payment_service.dart        # validación de tarjeta + registro de pago
-│   ├── alert_service.dart          # notificaciones internas
-│   └── dulce_repository.dart       # fachada que combina todos los servicios
-├── domain/
-│   └── order_workflow.dart         # reglas de transición de estado del pedido
-├── state/                          # ChangeNotifier providers (sesión, catálogo, pedidos, alertas)
-├── screens/
-│   ├── auth/                       # login, registro
-│   ├── customer/                   # catálogo, detalle/personalización, pedidos, pago
-│   ├── seller/                     # pedidos, productos, alta/edición, resumen
-│   └── root_router.dart            # decide login / cliente / tienda
-├── widgets/
-│   └── product_card.dart
-├── supabase/
-│   └── schema.sql                  # ← TODO el SQL de Supabase (tablas + RLS + triggers)
-└── main.dart
-```
-
-## 4. Notas importantes sobre la migración
-
-- **Autenticación real**: en el original las contraseñas se guardaban en la
-  tabla `users` (Room). Aquí se usa `Supabase Auth` (`auth.users` + JWT), que
-  es lo correcto; el rol (`customer`/`store`) vive en `public.profiles`,
-  vinculado 1:1 por `id` mediante un trigger.
-- **Pagos**: el proyecto original delegaba el cobro real a un backend propio
-  que hablaba con Stripe/Mercado Pago. Sin ese backend, `payment_service.dart`
-  valida la tarjeta localmente (algoritmo de Luhn, como el original) y
-  registra el pago directamente en `payments`. Para cobrar de verdad, crea
-  una **Supabase Edge Function** que reciba los datos y llame a Stripe con la
-  secret key del lado servidor, y sustituye el bloque comentado en
-  `payment_service.dart` por `supabase.functions.invoke(...)`.
-- **Tiempo real**: los listados de productos y pedidos usan
-  `supabase.from(...).stream(...)` (Realtime), reemplazando los `Flow` de
-  Room/StateFlow del proyecto Android.
-- **Subida de imágenes**: el original subía a Cloudinary vía el backend. Aquí
-  se dejó el campo `imageUrl` como texto libre; si quieres subir archivos
-  desde el dispositivo, lo más directo en Supabase es usar **Supabase
-  Storage** (`supabase.storage.from('bucket').upload(...)`) y guardar la URL
-  pública resultante en `products.image_url`.
+El APK resultante se encontrará en: `build/app/outputs/flutter-apk/app-release.apk`

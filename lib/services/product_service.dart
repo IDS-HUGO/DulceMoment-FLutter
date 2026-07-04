@@ -74,19 +74,26 @@ class ProductService {
     required String description,
     required double price,
     required int stock,
+    String? imageUrl,
   }) async {
     if (name.trim().isEmpty || description.trim().isEmpty || price <= 0 || stock < 0) {
       throw ArgumentError('Datos de producto inválidos');
     }
 
+    final updates = {
+      'name': name.trim(),
+      'description': description.trim(),
+      'base_price': price,
+      'stock': stock,
+    };
+
+    if (imageUrl != null && imageUrl.trim().isNotEmpty) {
+      updates['image_url'] = imageUrl.trim();
+    }
+
     final row = await supabase
         .from('products')
-        .update({
-          'name': name.trim(),
-          'description': description.trim(),
-          'base_price': price,
-          'stock': stock,
-        })
+        .update(updates)
         .eq('id', productId)
         .select(_selectWithOptions)
         .single();

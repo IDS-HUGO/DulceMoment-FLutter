@@ -75,6 +75,7 @@ class CatalogProvider extends ChangeNotifier {
     required String description,
     required double price,
     required int stock,
+    String? imageUrl,
   }) async {
     try {
       await repository.products.updateProduct(
@@ -83,6 +84,7 @@ class CatalogProvider extends ChangeNotifier {
         description: description,
         price: price,
         stock: stock,
+        imageUrl: imageUrl,
       );
       await refresh(onlyActive: false);
       return true;

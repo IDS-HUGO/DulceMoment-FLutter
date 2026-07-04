@@ -1,8 +1,12 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/app_theme.dart';
 import '../../models/product.dart';
+import '../../services/cloudinary_service.dart';
 import '../../services/product_service.dart';
 import '../../state/catalog_provider.dart';
 
@@ -26,22 +30,22 @@ class _AddEditProductScreenState extends State<AddEditProductScreen> {
   late final _stockController = TextEditingController(
     text: widget.product != null ? widget.product!.stock.toString() : '',
   );
-  late final _imageUrlController =
-      TextEditingController(text: widget.product?.imageUrl ?? '');
 
   final List<_OptionDraft> _newOptions = [];
   bool _isSubmitting = false;
-  String _previewImageUrl = '';
+  bool _isUploadingImage = false;
+
+  // Imagen seleccionada localmente (antes de subir)
+  File? _pickedImage;
+  // URL final en Cloudinary (o la que ya tenía el producto)
+  String _uploadedImageUrl = '';
 
   bool get _isEditing => widget.product != null;
 
   @override
   void initState() {
     super.initState();
-    _previewImageUrl = widget.product?.imageUrl ?? '';
-    _imageUrlController.addListener(() {
-      if (mounted) setState(() => _previewImageUrl = _imageUrlController.text);
-    });
+    _uploadedImageUrl = widget.product?.imageUrl ?? '';
   }
 
   @override
@@ -50,12 +54,117 @@ class _AddEditProductScreenState extends State<AddEditProductScreen> {
     _descriptionController.dispose();
     _priceController.dispose();
     _stockController.dispose();
-    _imageUrlController.dispose();
     for (final opt in _newOptions) {
       opt.dispose();
     }
     super.dispose();
   }
+
+  // ─────────────────────────── IMAGEN ───────────────────────────────────────
+
+  Future<void> _pickImage(ImageSource source) async {
+    try {
+      final picker = ImagePicker();
+      final picked = await picker.pickImage(
+        source: source,
+        imageQuality: 85,
+        maxWidth: 1200,
+        maxHeight: 1200,
+      );
+      if (picked == null) return;
+      if (!mounted) return;
+
+      setState(() {
+        _pickedImage = File(picked.path);
+        _isUploadingImage = true;
+      });
+
+      final url = await CloudinaryService.uploadImage(_pickedImage!);
+
+      if (!mounted) return;
+      setState(() {
+        _uploadedImageUrl = url;
+        _isUploadingImage = false;
+      });
+
+      DulceWidgets.showSuccess(context, '¡Imagen subida con éxito!');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isUploadingImage = false);
+      DulceWidgets.showError(context, 'Error al subir imagen: $e');
+    }
+  }
+
+  Future<void> _showImageSourceDialog() async {
+    await showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 16),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade300,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              Text(
+                'Seleccionar imagen',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                  color: DulceColors.chocolateDark,
+                ),
+              ),
+              const SizedBox(height: 16),
+              _SourceTile(
+                icon: Icons.camera_alt_rounded,
+                label: 'Tomar foto',
+                color: DulceColors.chocolate,
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _pickImage(ImageSource.camera);
+                },
+              ),
+              _SourceTile(
+                icon: Icons.photo_library_rounded,
+                label: 'Elegir de la galería',
+                color: DulceColors.rose,
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _pickImage(ImageSource.gallery);
+                },
+              ),
+              if (_uploadedImageUrl.isNotEmpty || _pickedImage != null)
+                _SourceTile(
+                  icon: Icons.delete_outline_rounded,
+                  label: 'Quitar imagen',
+                  color: DulceColors.error,
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    setState(() {
+                      _pickedImage = null;
+                      _uploadedImageUrl = '';
+                    });
+                  },
+                ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ─────────────────────────── OPCIONES ─────────────────────────────────────
 
   void _addOptionRow() {
     setState(() => _newOptions.add(_OptionDraft()));
@@ -68,8 +177,16 @@ class _AddEditProductScreenState extends State<AddEditProductScreen> {
     });
   }
 
+  // ─────────────────────────── SUBMIT ───────────────────────────────────────
+
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
+    if (_isUploadingImage) {
+      DulceWidgets.showError(
+          context, 'Espera a que la imagen termine de subirse');
+      return;
+    }
+
     setState(() => _isSubmitting = true);
 
     final catalog = context.read<CatalogProvider>();
@@ -77,7 +194,6 @@ class _AddEditProductScreenState extends State<AddEditProductScreen> {
     final description = _descriptionController.text.trim();
     final price = double.parse(_priceController.text.trim());
     final stock = int.parse(_stockController.text.trim());
-    final imageUrl = _imageUrlController.text.trim();
 
     bool ok;
     if (_isEditing) {
@@ -87,6 +203,7 @@ class _AddEditProductScreenState extends State<AddEditProductScreen> {
         description: description,
         price: price,
         stock: stock,
+        imageUrl: _uploadedImageUrl.isNotEmpty ? _uploadedImageUrl : null,
       );
     } else {
       ok = await catalog.addProduct(
@@ -94,7 +211,7 @@ class _AddEditProductScreenState extends State<AddEditProductScreen> {
         description: description,
         price: price,
         stock: stock,
-        imageUrl: imageUrl,
+        imageUrl: _uploadedImageUrl,
       );
     }
 
@@ -122,7 +239,6 @@ class _AddEditProductScreenState extends State<AddEditProductScreen> {
 
     if (ok) {
       Navigator.of(context).pop();
-      // No podemos usar DulceWidgets desde aquí porque el contexto es del padre
     } else {
       DulceWidgets.showError(
         context,
@@ -131,14 +247,16 @@ class _AddEditProductScreenState extends State<AddEditProductScreen> {
     }
   }
 
+  // ─────────────────────────── BUILD ────────────────────────────────────────
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: CustomScrollView(
         slivers: [
-          // AppBar con preview de imagen
+          // AppBar con preview de la imagen seleccionada
           SliverAppBar(
-            expandedHeight: _previewImageUrl.isNotEmpty ? 200 : kToolbarHeight,
+            expandedHeight: 240,
             pinned: true,
             backgroundColor: DulceColors.chocolate,
             leading: GestureDetector(
@@ -163,19 +281,69 @@ class _AddEditProductScreenState extends State<AddEditProductScreen> {
                     fontWeight: FontWeight.w700,
                     color: Colors.white),
               ),
-              background: _previewImageUrl.isNotEmpty
-                  ? Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        Image.network(
-                          _previewImageUrl,
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) => _gradientBackground(),
+              background: Stack(
+                fit: StackFit.expand,
+                children: [
+                  // Imagen preview
+                  _buildHeroImage(),
+                  // Botón para cambiar la imagen
+                  Positioned(
+                    bottom: 52,
+                    right: 16,
+                    child: GestureDetector(
+                      onTap: _isUploadingImage
+                          ? null
+                          : _showImageSourceDialog,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: _isUploadingImage
+                              ? Colors.black45
+                              : DulceColors.rose,
+                          borderRadius: BorderRadius.circular(20),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.3),
+                              blurRadius: 8,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
                         ),
-                        Container(color: Colors.black38),
-                      ],
-                    )
-                  : _gradientBackground(),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (_isUploadingImage)
+                              const SizedBox(
+                                width: 14,
+                                height: 14,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2, color: Colors.white),
+                              )
+                            else
+                              const Icon(Icons.camera_alt_rounded,
+                                  color: Colors.white, size: 16),
+                            const SizedBox(width: 6),
+                            Text(
+                              _isUploadingImage
+                                  ? 'Subiendo...'
+                                  : (_pickedImage != null ||
+                                          _uploadedImageUrl.isNotEmpty)
+                                      ? 'Cambiar foto'
+                                      : 'Agregar foto',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
 
@@ -192,7 +360,7 @@ class _AddEditProductScreenState extends State<AddEditProductScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Sección: Información básica
+                    // Información básica
                     _FormSection(
                       title: 'Información básica',
                       icon: Icons.info_outline_rounded,
@@ -228,7 +396,7 @@ class _AddEditProductScreenState extends State<AddEditProductScreen> {
                     ),
                     const SizedBox(height: 16),
 
-                    // Sección: Precio y stock
+                    // Precio y stock
                     _FormSection(
                       title: 'Precio y stock',
                       icon: Icons.attach_money_rounded,
@@ -237,8 +405,9 @@ class _AddEditProductScreenState extends State<AddEditProductScreen> {
                           Expanded(
                             child: TextFormField(
                               controller: _priceController,
-                              keyboardType: const TextInputType.numberWithOptions(
-                                  decimal: true),
+                              keyboardType:
+                                  const TextInputType.numberWithOptions(
+                                      decimal: true),
                               decoration: const InputDecoration(
                                 labelText: 'Precio base (\$)',
                                 prefixIcon: Icon(Icons.sell_outlined),
@@ -274,24 +443,7 @@ class _AddEditProductScreenState extends State<AddEditProductScreen> {
                     ),
                     const SizedBox(height: 16),
 
-                    // Sección: Imagen (solo en creación)
-                    if (!_isEditing) ...[
-                      _FormSection(
-                        title: 'Imagen del producto',
-                        icon: Icons.image_outlined,
-                        child: TextFormField(
-                          controller: _imageUrlController,
-                          decoration: const InputDecoration(
-                            labelText: 'URL de imagen (opcional)',
-                            prefixIcon: Icon(Icons.link_rounded),
-                            hintText: 'https://...',
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                    ],
-
-                    // Sección: Opciones de personalización
+                    // Opciones de personalización
                     _FormSection(
                       title: 'Opciones de personalización',
                       icon: Icons.tune_rounded,
@@ -307,13 +459,11 @@ class _AddEditProductScreenState extends State<AddEditProductScreen> {
                       ),
                       child: _newOptions.isEmpty
                           ? Container(
-                              padding: const EdgeInsets.all(16),
+                              padding: const EdgeInsets.all(14),
                               decoration: BoxDecoration(
                                 color: DulceColors.cream,
                                 borderRadius: BorderRadius.circular(12),
-                                border: Border.all(
-                                    color: DulceColors.sand,
-                                    style: BorderStyle.solid),
+                                border: Border.all(color: DulceColors.sand),
                               ),
                               child: Row(
                                 children: [
@@ -345,9 +495,11 @@ class _AddEditProductScreenState extends State<AddEditProductScreen> {
                     ),
                     const SizedBox(height: 24),
 
-                    // Botón de guardar
+                    // Botón guardar
                     _SaveButton(
-                      onPressed: _isSubmitting ? null : _submit,
+                      onPressed: (_isSubmitting || _isUploadingImage)
+                          ? null
+                          : _submit,
                       isLoading: _isSubmitting,
                       isEditing: _isEditing,
                     ),
@@ -362,9 +514,97 @@ class _AddEditProductScreenState extends State<AddEditProductScreen> {
     );
   }
 
+  Widget _buildHeroImage() {
+    // Imagen local recién seleccionada (ya subida o subiendo)
+    if (_pickedImage != null) {
+      return Stack(
+        fit: StackFit.expand,
+        children: [
+          Image.file(_pickedImage!, fit: BoxFit.cover),
+          if (_isUploadingImage)
+            Container(
+              color: Colors.black38,
+              child: const Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    CircularProgressIndicator(color: Colors.white),
+                    SizedBox(height: 12),
+                    Text('Subiendo imagen...',
+                        style: TextStyle(color: Colors.white, fontSize: 14)),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      );
+    }
+    // URL de Cloudinary ya existente (edición o subida previa)
+    if (_uploadedImageUrl.isNotEmpty) {
+      return Image.network(
+        _uploadedImageUrl,
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) => _gradientBackground(),
+      );
+    }
+    // Sin imagen
+    return _gradientBackground();
+  }
+
   Widget _gradientBackground() {
     return Container(
       decoration: const BoxDecoration(gradient: DulceColors.gradientPrimary),
+      child: const Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.add_photo_alternate_rounded,
+                size: 56, color: Colors.white54),
+            SizedBox(height: 8),
+            Text(
+              'Toca "Agregar foto" para subir\nuna imagen del producto',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.white60, fontSize: 13),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────── WIDGETS AUXILIARES ───────────────────────────────
+
+class _SourceTile extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+
+  const _SourceTile({
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      onTap: onTap,
+      leading: Container(
+        width: 44,
+        height: 44,
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Icon(icon, color: color, size: 22),
+      ),
+      title: Text(
+        label,
+        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
+      ),
     );
   }
 }
@@ -442,58 +682,54 @@ class _OptionRow extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: DulceColors.sand),
       ),
-      child: Column(
+      child: Row(
         children: [
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: option.category,
-                  decoration: const InputDecoration(
-                    labelText: 'Categoría',
-                    hintText: 'ej: size',
-                    isDense: true,
-                    contentPadding:
-                        EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-                  ),
-                ),
+          Expanded(
+            child: TextField(
+              controller: option.category,
+              decoration: const InputDecoration(
+                labelText: 'Categoría',
+                hintText: 'ej: size',
+                isDense: true,
+                contentPadding:
+                    EdgeInsets.symmetric(horizontal: 10, vertical: 10),
               ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: TextField(
-                  controller: option.value,
-                  decoration: const InputDecoration(
-                    labelText: 'Valor',
-                    hintText: 'ej: Grande',
-                    isDense: true,
-                    contentPadding:
-                        EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-                  ),
-                ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: TextField(
+              controller: option.value,
+              decoration: const InputDecoration(
+                labelText: 'Valor',
+                hintText: 'ej: Grande',
+                isDense: true,
+                contentPadding:
+                    EdgeInsets.symmetric(horizontal: 10, vertical: 10),
               ),
-              const SizedBox(width: 8),
-              SizedBox(
-                width: 80,
-                child: TextField(
-                  controller: option.priceDelta,
-                  keyboardType:
-                      const TextInputType.numberWithOptions(decimal: true),
-                  decoration: const InputDecoration(
-                    labelText: '+\$',
-                    isDense: true,
-                    contentPadding:
-                        EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-                  ),
-                ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 72,
+            child: TextField(
+              controller: option.priceDelta,
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(
+                labelText: '+\$',
+                isDense: true,
+                contentPadding:
+                    EdgeInsets.symmetric(horizontal: 10, vertical: 10),
               ),
-              IconButton(
-                onPressed: onRemove,
-                icon: const Icon(Icons.close_rounded,
-                    size: 18, color: DulceColors.error),
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(),
-              ),
-            ],
+            ),
+          ),
+          IconButton(
+            onPressed: onRemove,
+            icon: const Icon(Icons.close_rounded,
+                size: 18, color: DulceColors.error),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(),
           ),
         ],
       ),
